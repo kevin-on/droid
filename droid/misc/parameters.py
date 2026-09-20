@@ -2,12 +2,12 @@ import os
 from cv2 import aruco
 
 # Robot Params #
-nuc_ip = ""
-robot_ip = ""
+nuc_ip = '172.16.0.1'
+robot_ip = '172.16.0.2'
 laptop_ip = ""
 sudo_password = ""
-robot_type = ""  # 'panda' or 'fr3'
-robot_serial_number = ""
+robot_type = "panda"  # 'panda' or 'fr3'
+robot_serial_number = "295341-1325480"
 
 # Camera ID's #
 hand_camera_id = ""

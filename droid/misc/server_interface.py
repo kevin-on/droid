@@ -21,8 +21,9 @@ def attempt_n_times(function_list, max_attempts, sleep_time=0.1):
 
 
 class ServerInterface:
-    def __init__(self, ip_address="127.0.0.1", launch=True):
+    def __init__(self, ip_address="127.0.0.1", port=4242, launch=True):
         self.ip_address = ip_address
+        self.port = port
         self.establish_connection()
 
         if launch:
@@ -30,8 +31,8 @@ class ServerInterface:
             attempt_n_times(func_list, max_attempts=2)
 
     def establish_connection(self):
-        self.server = zerorpc.Client(heartbeat=20)
-        self.server.connect("tcp://" + self.ip_address + ":4242")
+        self.server = zerorpc.Client(heartbeat=30)  # match the server (run_server.py); survive slow launches
+        self.server.connect("tcp://" + self.ip_address + ":" + str(self.port))
 
     def launch_controller(self):
         self.server.launch_controller()

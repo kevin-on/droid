@@ -2,6 +2,7 @@
 import os
 import time
 
+import gevent
 import grpc
 import numpy as np
 import torch
@@ -16,6 +17,19 @@ from droid.robot_ik.robot_ik_solver import RobotIKSolver
 
 
 class FrankaRobot:
+    def __init__(
+        self,
+        robot_ip="172.16.0.2",
+        robot_port=50051,
+        gripper_comport="/dev/ttyUSB0",
+        gripper_port=50052,
+    ):
+        # Per-arm settings so one package can drive multiple robots (e.g. left/right).
+        self.robot_ip = robot_ip
+        self.robot_port = robot_port
+        self.gripper_comport = gripper_comport
+        self.gripper_port = gripper_port
+
     def launch_controller(self):
         try:
             self.kill_controller()
@@ -23,21 +37,59 @@ class FrankaRobot:
             pass
 
         dir_path = os.path.dirname(os.path.realpath(__file__))
+        # Redirect launcher output to per-arm log files. run_terminal_command uses an
+        # UNREAD subprocess.PIPE, so without this the chatty polymetis controller fills
+        # the ~64KB pipe buffer, blocks on write, stalls the realtime thread (logged as
+        # "Interrupted control update greater than threshold"), and the controller dies
+        # -> client then sees "failed to connect to all addresses". Per-port log names so
+        # the two arms never clobber each other's logs.
+        robot_log = "/tmp/droid_robot_%s.log" % self.robot_port
+        gripper_log = "/tmp/droid_gripper_%s.log" % self.gripper_port
         self._robot_process = run_terminal_command(
-            "echo " + sudo_password + " | sudo -S " + "bash " + dir_path + "/launch_robot.sh"
+            "echo " + sudo_password + " | sudo -S bash " + dir_path
+            + "/launch_robot.sh " + self.robot_ip + " " + str(self.robot_port)
+            + " > " + robot_log + " 2>&1"
         )
         self._gripper_process = run_terminal_command(
-            "echo " + sudo_password + " | sudo -S " + "bash " + dir_path + "/launch_gripper.sh"
+            "echo " + sudo_password + " | sudo -S bash " + dir_path
+            + "/launch_gripper.sh " + self.gripper_comport + " " + str(self.gripper_port)
+            + " > " + gripper_log + " 2>&1"
         )
         self._server_launched = True
-        time.sleep(5)
+        gevent.sleep(5)  # cooperative sleep: keeps the zerorpc heartbeat alive while waiting
 
     def launch_robot(self):
-        self._robot = RobotInterface(ip_address="localhost")
-        self._gripper = GripperInterface(ip_address="localhost")
+        # The polymetis controller + gripper servers (started by launch_controller)
+        # can take several seconds to come up. Retry connecting instead of failing
+        # immediately with gRPC "failed to connect to all addresses".
+        self._robot = self._connect_with_retry(
+            lambda: RobotInterface(ip_address="localhost", port=self.robot_port)
+        )
+        def _gripper_factory():
+            g = GripperInterface(ip_address="localhost", port=self.gripper_port)
+            # GripperInterface SWALLOWS the "server not ready" gRPC error: it logs
+            # "Metadata unavailable from server" and returns without setting .metadata.
+            # Raise so _connect_with_retry waits for the gripper server to be ready,
+            # instead of crashing on `.metadata.max_width` on the next line.
+            if not hasattr(g, "metadata"):
+                raise RuntimeError("gripper server not ready (metadata unavailable)")
+            return g
+
+        self._gripper = self._connect_with_retry(_gripper_factory)
         self._max_gripper_width = self._gripper.metadata.max_width
         self._ik_solver = RobotIKSolver()
         self._controller_not_loaded = False
+
+    @staticmethod
+    def _connect_with_retry(factory, timeout=30, interval=1.0):
+        deadline = time.time() + timeout
+        while True:
+            try:
+                return factory()
+            except Exception:
+                if time.time() > deadline:
+                    raise
+                gevent.sleep(interval)  # cooperative: keep the zerorpc heartbeat alive while retrying
 
     def kill_controller(self):
         self._robot_process.kill()
@@ -120,7 +172,7 @@ class FrankaRobot:
             command = gripper_delta + self.get_gripper_position()
 
         command = float(np.clip(command, 0, 1))
-        self._gripper.goto(width=self._max_gripper_width * (1 - command), speed=0.05, force=0.1, blocking=blocking)
+        self._gripper.goto(width=self._max_gripper_width * (1 - command), speed=0.1, force=70.0, blocking=blocking)
 
     def add_noise_to_joints(self, original_joints, cartesian_noise):
         original_joints = torch.Tensor(original_joints)
@@ -181,7 +233,7 @@ class FrankaRobot:
 
         return state_dict, timestamp_dict
 
-    def adaptive_time_to_go(self, desired_joint_position, t_min=0, t_max=4):
+    def adaptive_time_to_go(self, desired_joint_position, t_min=0, t_max=10):
         curr_joint_position = self._robot.get_joint_positions()
         displacement = desired_joint_position - curr_joint_position
         time_to_go = self._robot._adaptive_time_to_go(displacement)
