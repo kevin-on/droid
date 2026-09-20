@@ -1,5 +1,6 @@
 # ROBOT SPECIFIC IMPORTS
 import os
+import subprocess
 import time
 
 import gevent
@@ -9,7 +10,7 @@ import torch
 from polymetis import GripperInterface, RobotInterface
 
 from droid.misc.parameters import sudo_password
-from droid.misc.subprocess_utils import run_terminal_command, run_threaded_command
+from droid.misc.subprocess_utils import run_threaded_command
 
 # UTILITY SPECIFIC IMPORTS
 from droid.misc.transformations import add_poses, euler_to_quat, pose_diff, quat_to_euler
@@ -23,40 +24,55 @@ class FrankaRobot:
         robot_port=50051,
         gripper_comport="/dev/ttyUSB0",
         gripper_port=50052,
+        *,
+        gripper_device=None,
     ):
+        # Preserve the NUC's positional API and accept EXPO-FT's keyword alias.
+        if gripper_device is not None:
+            if gripper_comport != "/dev/ttyUSB0" and gripper_comport != gripper_device:
+                raise ValueError("Conflicting gripper_comport and gripper_device")
+            gripper_comport = gripper_device
         # Per-arm settings so one package can drive multiple robots (e.g. left/right).
         self.robot_ip = robot_ip
         self.robot_port = robot_port
         self.gripper_comport = gripper_comport
         self.gripper_port = gripper_port
+        self._controller_processes = []
+        self._server_launched = False
 
     def launch_controller(self):
-        try:
-            self.kill_controller()
-        except:
-            pass
-
+        # Only stop processes started by this object. Existing controllers can be
+        # reused through ServerInterface(launch=False); never kill by port/name.
+        self.kill_controller()
         dir_path = os.path.dirname(os.path.realpath(__file__))
-        # Redirect launcher output to per-arm log files. run_terminal_command uses an
-        # UNREAD subprocess.PIPE, so without this the chatty polymetis controller fills
-        # the ~64KB pipe buffer, blocks on write, stalls the realtime thread (logged as
-        # "Interrupted control update greater than threshold"), and the controller dies
-        # -> client then sees "failed to connect to all addresses". Per-port log names so
-        # the two arms never clobber each other's logs.
-        robot_log = "/tmp/droid_robot_%s.log" % self.robot_port
-        gripper_log = "/tmp/droid_gripper_%s.log" % self.gripper_port
-        self._robot_process = run_terminal_command(
-            "echo " + sudo_password + " | sudo -S bash " + dir_path
-            + "/launch_robot.sh " + self.robot_ip + " " + str(self.robot_port)
-            + " > " + robot_log + " 2>&1"
+        launches = (
+            ("launch_robot.sh", [self.robot_ip, str(self.robot_port)], f"/tmp/droid_robot_{self.robot_port}.log"),
+            ("launch_gripper.sh", [self.gripper_comport, str(self.gripper_port)],
+             f"/tmp/droid_gripper_{self.gripper_port}.log"),
         )
-        self._gripper_process = run_terminal_command(
-            "echo " + sudo_password + " | sudo -S bash " + dir_path
-            + "/launch_gripper.sh " + self.gripper_comport + " " + str(self.gripper_port)
-            + " > " + gripper_log + " 2>&1"
-        )
-        self._server_launched = True
-        gevent.sleep(5)  # cooperative sleep: keeps the zerorpc heartbeat alive while waiting
+        try:
+            for script, args, log_path in launches:
+                # Inherit a real log file, not an unread PIPE that can stall the
+                # controller. Keep authentication out of the command line.
+                with open(log_path, "ab") as log:
+                    process = subprocess.Popen(
+                        ["sudo", "-S", "bash", os.path.join(dir_path, script), *args],
+                        stdin=subprocess.PIPE, stdout=log, stderr=subprocess.STDOUT,
+                        text=True, start_new_session=True,
+                    )
+                self._controller_processes.append(process)
+                try:
+                    process.stdin.write(sudo_password + "\n")
+                finally:
+                    process.stdin.close()
+            gevent.sleep(5)  # cooperative: preserve the ZeroRPC heartbeat
+            for process, (_, _, log_path) in zip(self._controller_processes, launches):
+                if process.poll() is not None:
+                    raise RuntimeError(f"Controller launcher exited; check {log_path}")
+            self._server_launched = True
+        except BaseException:
+            self.kill_controller()
+            raise
 
     def launch_robot(self):
         # The polymetis controller + gripper servers (started by launch_controller)
@@ -92,8 +108,22 @@ class FrankaRobot:
                 gevent.sleep(interval)  # cooperative: keep the zerorpc heartbeat alive while retrying
 
     def kill_controller(self):
-        self._robot_process.kill()
-        self._gripper_process.kill()
+        # Keep a failed stop in the list so a caller can retry it. No unrelated
+        # arm, gripper, or pre-existing controller is selected for termination.
+        while self._controller_processes:
+            process = self._controller_processes[-1]
+            if process.poll() is None:
+                subprocess.run(
+                    ["sudo", "-S", "kill", "-TERM", "--", f"-{process.pid}"],
+                    input=sudo_password + "\n", text=True, check=True, timeout=10,
+                )
+                deadline = time.monotonic() + 10
+                while process.poll() is None:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(f"Controller process group {process.pid} did not stop")
+                    gevent.sleep(0.05)
+            self._controller_processes.pop()
+        self._server_launched = False
 
     def update_command(self, command, action_space="cartesian_velocity", gripper_action_space=None, blocking=False):
         action_dict = self.create_action_dict(command, action_space=action_space, gripper_action_space=gripper_action_space)

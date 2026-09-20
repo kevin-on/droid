@@ -24,9 +24,25 @@ class RobotEnv(gym.Env):
         randomize_low=None,
         randomize_high=None,
         server_port=4242,
+        robot_server_ip=nuc_ip,
+        robot_server_port=None,
+        launch_controller=True,
+        camera_serials=None,
+        wrist_camera_serial=hand_camera_id,
     ):
         # Initialize Gym Environment
         super().__init__()
+
+        # Keep the existing server_port argument while accepting EXPO-FT's name.
+        if robot_server_port is not None:
+            if server_port != 4242 and server_port != robot_server_port:
+                raise ValueError("Conflicting server_port and robot_server_port")
+            server_port = robot_server_port
+        self.hand_camera_id = str(wrist_camera_serial) if wrist_camera_serial is not None else hand_camera_id
+        if camera_serials is not None:
+            camera_serials = [str(serial) for serial in camera_serials]
+            if not camera_serials or self.hand_camera_id not in camera_serials:
+                raise ValueError("camera_serials must include the configured wrist camera")
 
         # Define Action Space #
         assert action_space in ["cartesian_position", "joint_position", "cartesian_velocity", "joint_velocity"]
@@ -48,17 +64,18 @@ class RobotEnv(gym.Env):
         self.DoF = 7 if ('cartesian' in action_space) else 8
         self.control_hz = 30
 
-        if nuc_ip is None:
+        if robot_server_ip is None:
             from franka.robot import FrankaRobot
 
             self._robot = FrankaRobot()
         else:
-            self._robot = ServerInterface(ip_address=nuc_ip, port=server_port)
+            self._robot = ServerInterface(ip_address=robot_server_ip, port=server_port, launch=launch_controller)
 
         # Create Cameras
-        self.camera_reader = MultiCameraWrapper(camera_kwargs)
+        self.camera_reader = MultiCameraWrapper(camera_kwargs, camera_serials, self.hand_camera_id)
         self.calibration_dict = load_calibration_info()
-        self.camera_type_dict = camera_type_dict
+        self.camera_type_dict = (camera_type_dict if camera_serials is None else
+                                 {serial: 0 if serial == self.hand_camera_id else 1 for serial in camera_serials})
 
         # # Reset Robot
         # if do_reset:
@@ -125,7 +142,7 @@ class RobotEnv(gym.Env):
         # Adjust gripper camere by current pose
         extrinsics = deepcopy(self.calibration_dict)
         for cam_id in self.calibration_dict:
-            if hand_camera_id not in cam_id:
+            if not self.hand_camera_id or self.hand_camera_id not in cam_id:
                 continue
             gripper_pose = state_dict["cartesian_position"]
             extrinsics[cam_id + "_gripper_offset"] = extrinsics[cam_id]

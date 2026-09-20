@@ -6,10 +6,10 @@ from droid.franka.robot import FrankaRobot
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Launch a DROID zerorpc robot server for one arm.")
-    parser.add_argument("--zerorpc-port", type=int, default=4242, help="Port the zerorpc clients connect to.")
+    parser.add_argument("--zerorpc-port", "--port", type=int, default=4242, help="Port the zerorpc clients connect to.")
     parser.add_argument("--robot-ip", default="172.16.0.2", help="Franka control-box IP of this arm.")
     parser.add_argument("--robot-port", type=int, default=50051, help="Local polymetis controller port for this arm.")
-    parser.add_argument("--gripper-comport", default="/dev/ttyUSB0", help="Robotiq gripper serial device for this arm.")
+    parser.add_argument("--gripper-comport", "--gripper-device", default="/dev/ttyUSB0", help="Robotiq gripper serial device for this arm.")
     parser.add_argument("--gripper-port", type=int, default=50052, help="Local polymetis gripper server port for this arm.")
     args = parser.parse_args()
 
@@ -29,4 +29,7 @@ if __name__ == "__main__":
         f"ctrl_port={args.robot_port} gripper={args.gripper_comport}:{args.gripper_port}",
         flush=True,
     )
-    s.run()
+    try:
+        s.run()
+    finally:
+        robot_client.kill_controller()

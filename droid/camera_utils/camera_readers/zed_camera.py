@@ -12,15 +12,25 @@ except ModuleNotFoundError:
     print("WARNING: You have not setup the ZED cameras, and currently cannot use them")
 
 
-def gather_zed_cameras():
+def gather_zed_cameras(camera_serials=None, wrist_camera_serial=None):
     all_zed_cameras = []
     try:
         cameras = sl.Camera.get_device_list()
     except NameError:
+        if camera_serials is not None:
+            raise RuntimeError("ZED SDK is required for the selected cameras")
         return []
 
+    if camera_serials is not None:
+        camera_serials = {str(serial) for serial in camera_serials}
+        missing = camera_serials - {str(cam.serial_number) for cam in cameras}
+        if missing:
+            raise ValueError("Requested ZED cameras not found: " + ", ".join(sorted(missing)))
+
     for cam in cameras:
-        cam = ZedCamera(cam)
+        if camera_serials is not None and str(cam.serial_number) not in camera_serials:
+            continue
+        cam = ZedCamera(cam, wrist_camera_serial=wrist_camera_serial)
         all_zed_cameras.append(cam)
 
     return all_zed_cameras
@@ -42,10 +52,11 @@ advanced_params = dict(
 
 
 class ZedCamera:
-    def __init__(self, camera):
+    def __init__(self, camera, wrist_camera_serial=None):
         # Save Parameters #
         self.serial_number = str(camera.serial_number)
-        self.is_hand_camera = self.serial_number == hand_camera_id
+        wrist_serial = hand_camera_id if wrist_camera_serial is None else str(wrist_camera_serial)
+        self.is_hand_camera = self.serial_number == wrist_serial
         self.high_res_calibration = False
         self.current_mode = None
         self._current_params = None

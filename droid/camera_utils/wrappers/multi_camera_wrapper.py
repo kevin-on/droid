@@ -8,15 +8,20 @@ from droid.camera_utils.info import get_camera_type
 
 
 class MultiCameraWrapper:
-    def __init__(self, camera_kwargs={}):
+    def __init__(self, camera_kwargs={}, camera_serials=None, wrist_camera_serial=None):
         # Open Cameras #
-        zed_cameras = gather_zed_cameras()
+        zed_cameras = gather_zed_cameras(camera_serials, wrist_camera_serial)
         self.camera_dict = {cam.serial_number: cam for cam in zed_cameras}
 
         # Set Correct Parameters #
         for cam_id in self.camera_dict.keys():
             cam_type = get_camera_type(cam_id)
-            curr_cam_kwargs = camera_kwargs.get(cam_type, {})
+            if camera_serials is not None:
+                cam_type = "hand_camera" if self.camera_dict[cam_id].is_hand_camera else "varied_camera"
+            curr_cam_kwargs = camera_kwargs.get(cam_type)
+            if curr_cam_kwargs is None:
+                # EXPO-FT calls the side-camera settings "static_camera".
+                curr_cam_kwargs = camera_kwargs.get("static_camera", {}) if cam_type == "varied_camera" else {}
             self.camera_dict[cam_id].set_reading_parameters(**curr_cam_kwargs)
 
         # Launch Camera #

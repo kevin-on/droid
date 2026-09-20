@@ -10,6 +10,11 @@ For more information about DROID, please see the following links:
 ![](https://droid-dataset.github.io/droid/assets/index/droid_teaser.jpg)
 
 ---------
+## EXPO-FT integration
+
+For this fork's NUC configuration, per-robot routing and offline tests, see
+[the multi-robot integration guide](docs/multi_robot.md).
+
 ## Setup Guide
 
 We assembled a step-by-step guide for setting up the DROID robot platform in our [developer documentation](https://droid-dataset.github.io/droid).

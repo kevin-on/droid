@@ -29,6 +29,9 @@ class ServerInterface:
         if launch:
             func_list = [self.launch_controller, self.launch_robot]
             attempt_n_times(func_list, max_attempts=2)
+        else:
+            # Attach the server-side interfaces without restarting controllers.
+            self.launch_robot()
 
     def establish_connection(self):
         self.server = zerorpc.Client(heartbeat=30)  # match the server (run_server.py); survive slow launches
