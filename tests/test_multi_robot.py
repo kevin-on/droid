@@ -304,3 +304,21 @@ def test_server_cli_aliases_and_cleanup(monkeypatch, port_flag, device_flag):
     assert events[0] == ("robot", dict(robot_ip="172.16.0.3", robot_port=50051,
                                      gripper_port=50052, gripper_comport="/dev/serial/by-id/gripper-B"))
     assert events[1:] == [("bind", "tcp://0.0.0.0:4243"), ("stop",)]
+
+
+@pytest.mark.parametrize("blanks,expected", [(["22"], ["21"]), (["21", "22"], [])])
+def test_blank_cameras_are_excluded_from_device_opening(blanks, expected):
+    cls, connections, readers = environment_class()
+    env = cls(camera_serials=["21", "22"], wrist_camera_serial="22", blank_camera_serials=blanks)
+    assert readers == [({}, expected, "22")]
+    assert env.camera_type_dict == {"21": 1, "22": 0}
+    assert env.blank_camera_serials == tuple(blanks)
+
+
+@pytest.mark.parametrize("serials,blanks", [(None, ["22"]), (["21", "22"], ["99"]),
+                                          (["21", "22"], "22")])
+def test_invalid_blank_selection_fails_before_hardware_access(serials, blanks):
+    cls, connections, readers = environment_class()
+    with pytest.raises(ValueError, match="blank_camera_serials"):
+        cls(camera_serials=serials, wrist_camera_serial="22", blank_camera_serials=blanks)
+    assert not connections and not readers

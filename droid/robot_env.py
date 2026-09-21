@@ -29,6 +29,7 @@ class RobotEnv(gym.Env):
         launch_controller=True,
         camera_serials=None,
         wrist_camera_serial=hand_camera_id,
+        blank_camera_serials=(),
     ):
         # Initialize Gym Environment
         super().__init__()
@@ -43,6 +44,19 @@ class RobotEnv(gym.Env):
             camera_serials = [str(serial) for serial in camera_serials]
             if not camera_serials or self.hand_camera_id not in camera_serials:
                 raise ValueError("camera_serials must include the configured wrist camera")
+
+        # TODO: Remove temporary blank-camera support once all cameras are connected.
+        # Test-only virtual cameras retain their configured identity, but never
+        # open a ZED device. The EXPO observation layer supplies their pixels.
+        if not isinstance(blank_camera_serials, (list, tuple)):
+            raise ValueError("blank_camera_serials must be a list of serials")
+        self.blank_camera_serials = tuple(str(serial) for serial in blank_camera_serials)
+        if self.blank_camera_serials and (
+            camera_serials is None or not set(self.blank_camera_serials).issubset(camera_serials)
+        ):
+            raise ValueError("blank_camera_serials must be a subset of explicit camera_serials")
+        real_camera_serials = (None if camera_serials is None else
+                               [serial for serial in camera_serials if serial not in self.blank_camera_serials])
 
         # Define Action Space #
         assert action_space in ["cartesian_position", "joint_position", "cartesian_velocity", "joint_velocity"]
@@ -72,7 +86,7 @@ class RobotEnv(gym.Env):
             self._robot = ServerInterface(ip_address=robot_server_ip, port=server_port, launch=launch_controller)
 
         # Create Cameras
-        self.camera_reader = MultiCameraWrapper(camera_kwargs, camera_serials, self.hand_camera_id)
+        self.camera_reader = MultiCameraWrapper(camera_kwargs, real_camera_serials, self.hand_camera_id)
         self.calibration_dict = load_calibration_info()
         self.camera_type_dict = (camera_type_dict if camera_serials is None else
                                  {serial: 0 if serial == self.hand_camera_id else 1 for serial in camera_serials})
