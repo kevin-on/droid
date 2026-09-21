@@ -1,4 +1,6 @@
 import os
+import fcntl
+import tempfile
 import random
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -9,23 +11,28 @@ from droid.camera_utils.info import get_camera_type
 
 class MultiCameraWrapper:
     def __init__(self, camera_kwargs={}, camera_serials=None, wrist_camera_serial=None):
-        # Open Cameras #
-        zed_cameras = gather_zed_cameras(camera_serials, wrist_camera_serial)
-        self.camera_dict = {cam.serial_number: cam for cam in zed_cameras}
+        # ZED enumeration probes USB devices and can collide with another
+        # process opening a different camera. Serialize discovery + initialization.
+        lock_path = os.path.join(tempfile.gettempdir(), f"droid-zed-init-{os.getuid()}.lock")
+        with open(lock_path, "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            # Open Cameras #
+            zed_cameras = gather_zed_cameras(camera_serials, wrist_camera_serial)
+            self.camera_dict = {cam.serial_number: cam for cam in zed_cameras}
 
-        # Set Correct Parameters #
-        for cam_id in self.camera_dict.keys():
-            cam_type = get_camera_type(cam_id)
-            if camera_serials is not None:
-                cam_type = "hand_camera" if self.camera_dict[cam_id].is_hand_camera else "varied_camera"
-            curr_cam_kwargs = camera_kwargs.get(cam_type)
-            if curr_cam_kwargs is None:
-                # EXPO-FT calls the side-camera settings "static_camera".
-                curr_cam_kwargs = camera_kwargs.get("static_camera", {}) if cam_type == "varied_camera" else {}
-            self.camera_dict[cam_id].set_reading_parameters(**curr_cam_kwargs)
+            # Set Correct Parameters #
+            for cam_id in self.camera_dict.keys():
+                cam_type = get_camera_type(cam_id)
+                if camera_serials is not None:
+                    cam_type = "hand_camera" if self.camera_dict[cam_id].is_hand_camera else "varied_camera"
+                curr_cam_kwargs = camera_kwargs.get(cam_type)
+                if curr_cam_kwargs is None:
+                    # EXPO-FT calls the side-camera settings "static_camera".
+                    curr_cam_kwargs = camera_kwargs.get("static_camera", {}) if cam_type == "varied_camera" else {}
+                self.camera_dict[cam_id].set_reading_parameters(**curr_cam_kwargs)
 
-        # Launch Camera #
-        self.set_trajectory_mode()
+            # Launch Camera #
+            self.set_trajectory_mode()
 
     ### Calibration Functions ###
     def get_camera(self, camera_id):

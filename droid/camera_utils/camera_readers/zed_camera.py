@@ -42,7 +42,7 @@ standard_params = dict(
     depth_minimum_distance=0.1,
     camera_resolution=sl.RESOLUTION.HD1080,
     depth_stabilization=False,
-    camera_fps=10,
+    camera_fps=15,
     camera_image_flip=sl.FLIP_MODE.OFF,
 )
 
@@ -86,6 +86,9 @@ class ZedCamera:
         self.traj_concatenate_images = concatenate_images
         self.traj_resolution = resolution
 
+        # Reopen on the next mode selection if depth requirements change.
+        if (getattr(self, "depth", None), getattr(self, "pointcloud", None)) != (depth, pointcloud):
+            self._current_params = None
         # Permenant Values #
         self.depth = depth
         self.pointcloud = pointcloud
@@ -149,7 +152,11 @@ class ZedCamera:
         sl_params = sl.InitParameters(**init_params)
         sl_params.set_from_serial_number(int(self.serial_number))
         sl_params.camera_image_flip = sl.FLIP_MODE.OFF
-        sl_params.enable_right_side_measure = True
+        needs_depth = bool(self.depth or self.pointcloud)
+        if not needs_depth:
+            # Skipping retrieve_measure alone still runs SDK neural depth.
+            sl_params.depth_mode = sl.DEPTH_MODE.NONE
+        sl_params.enable_right_side_measure = needs_depth
         status = self._cam.open(sl_params)
         if status != sl.ERROR_CODE.SUCCESS:
             raise RuntimeError("Camera Failed To Open")

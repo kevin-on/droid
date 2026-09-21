@@ -1,5 +1,7 @@
 """Offline regression tests: no SDK import, device access, sudo or controller launch."""
 import ast
+import fcntl
+import tempfile
 from copy import deepcopy
 import io
 import os
@@ -225,7 +227,8 @@ def test_robot_camera_roles_override_global_mapping(side_key):
     settings = {}
     for cam in cameras:
         cam.set_reading_parameters = lambda serial=cam.serial_number, **kw: settings.update({serial: kw})
-    namespace = dict(gather_zed_cameras=lambda *args: cameras, get_camera_type=lambda _: "wrong-global-role")
+    namespace = dict(os=os, fcntl=fcntl, tempfile=tempfile,
+                     gather_zed_cameras=lambda *args: cameras, get_camera_type=lambda _: "wrong-global-role")
     wrapper = load_definition("droid/camera_utils/wrappers/multi_camera_wrapper.py", "MultiCameraWrapper", namespace)
     wrapper({"hand_camera": {"left_only": True}, side_key: {"depth": False}}, ["21", "22"], "22")
     assert settings == {"21": {"depth": False}, "22": {"left_only": True}}
